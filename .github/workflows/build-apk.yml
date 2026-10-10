@@ -1,4 +1,4 @@
-name: Godot Project Validation
+name: Build Godot Android APK
 
 on:
   workflow_dispatch:
@@ -7,11 +7,17 @@ permissions:
   contents: read
 
 jobs:
-  validate:
+  build:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout project
         uses: actions/checkout@v4
+
+      - name: Install Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
 
       - name: Install Godot
         run: |
@@ -20,14 +26,40 @@ jobs:
           chmod +x Godot_v4.4.1-stable_linux.x86_64
           sudo mv Godot_v4.4.1-stable_linux.x86_64 /usr/local/bin/godot
 
-      - name: Check project files
+      - name: Install Android SDK
+        run: |
+          wget -q https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip -O tools.zip
+          mkdir -p "$HOME/android-sdk/cmdline-tools"
+          unzip -q tools.zip -d "$HOME/android-sdk/cmdline-tools"
+          mv "$HOME/android-sdk/cmdline-tools/cmdline-tools" "$HOME/android-sdk/cmdline-tools/latest"
+          echo "ANDROID_HOME=$HOME/android-sdk" >> "$GITHUB_ENV"
+          echo "$HOME/android-sdk/platform-tools" >> "$GITHUB_PATH"
+          echo "$HOME/android-sdk/cmdline-tools/latest/bin" >> "$GITHUB_PATH"
+          yes | sdkmanager --licenses >/dev/null || true
+          sdkmanager "platform-tools" "platforms;android-34" "build-tools;34.0.0"
+
+      - name: Install Godot export templates
+        run: |
+          mkdir -p "$HOME/.local/share/godot/export_templates/4.4.1.stable"
+          wget -q https://github.com/godotengine/godot/releases/download/4.4.1-stable/Godot_v4.4.1-stable_export_templates.tpz -O templates.tpz
+          unzip -q templates.tpz -d templates
+          cp -r templates/templates/* "$HOME/.local/share/godot/export_templates/4.4.1.stable/"
+
+      - name: Validate project
         run: |
           test -f project.godot
           test -f Main.tscn
           test -f Main.gd
-
-      - name: Validate Godot project
-        run: |
-          godot --version
           godot --headless --editor --path "$GITHUB_WORKSPACE" --quit
-          godot --headless --path "$GITHUB_WORKSPACE" --quit
+
+      - name: Export APK
+        run: |
+          mkdir -p build
+          godot --headless --path "$GITHUB_WORKSPACE" --export-debug "Android" "$GITHUB_WORKSPACE/build/AI-Game.apk"
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: AI-Game-APK
+          path: build/AI-Game.apk
+          if-no-files-found: error
