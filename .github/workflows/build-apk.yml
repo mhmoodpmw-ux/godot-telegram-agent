@@ -1,5 +1,4 @@
-
-name: Godot Android APK
+name: Godot Project Validation
 
 on:
   workflow_dispatch:
@@ -8,22 +7,27 @@ permissions:
   contents: read
 
 jobs:
-  build:
+  validate:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout repository
+      - name: Checkout project
         uses: actions/checkout@v4
+
+      - name: Install Godot
+        run: |
+          wget -q https://github.com/godotengine/godot/releases/download/4.4.1-stable/Godot_v4.4.1-stable_linux.x86_64.zip
+          unzip -q Godot_v4.4.1-stable_linux.x86_64.zip
+          chmod +x Godot_v4.4.1-stable_linux.x86_64
+          sudo mv Godot_v4.4.1-stable_linux.x86_64 /usr/local/bin/godot
 
       - name: Check project files
         run: |
-          echo "Checking for a Godot project..."
-          if [ ! -f project.godot ]; then
-            echo "::error::project.godot not found in repository root"
-            exit 1
-          fi
+          test -f project.godot
+          test -f Main.tscn
+          test -f Main.gd
 
-      - name: Build APK
+      - name: Validate Godot project
         run: |
-          echo "Project found. Godot and Android export setup are required."
-          echo "This workflow intentionally stops before export until the project is configured."
-          exit 1
+          godot --version
+          godot --headless --editor --path "$GITHUB_WORKSPACE" --quit
+          godot --headless --path "$GITHUB_WORKSPACE" --quit
