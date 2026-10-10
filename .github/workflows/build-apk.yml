@@ -44,17 +44,29 @@ jobs:
           test -f project.godot
           test -f Main.tscn
           test -f Main.gd
+          test -f export_presets.cfg
           godot --version
           godot --headless --editor --path "$GITHUB_WORKSPACE" --quit
 
       - name: Export Android APK
+        shell: bash
         run: |
           mkdir -p build
-          godot --headless --path "$GITHUB_WORKSPACE" --export-debug "Android" "$GITHUB_WORKSPACE/build/AI-Game.apk"
+          set -o pipefail
+          godot --headless --verbose --path "$GITHUB_WORKSPACE" --export-debug "Android" "$GITHUB_WORKSPACE/build/AI-Game.apk" 2>&1 | tee export.log
+
+      - name: Upload export log if build fails
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: Godot-Export-Log
+          path: export.log
+          if-no-files-found: ignore
+          retention-days: 7
 
       - name: Verify APK
         run: |
-          test -f build/AI-Game.apk
+          test -s build/AI-Game.apk
           ls -lh build/AI-Game.apk
 
       - name: Upload APK
