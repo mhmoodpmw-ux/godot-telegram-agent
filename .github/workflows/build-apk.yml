@@ -27,23 +27,20 @@ jobs:
 
       - name: Set up Android SDK
         uses: android-actions/setup-android@v3
-        with:
-          packages: |
-            platform-tools
-            platforms;android-35
-            build-tools;35.0.0
 
-      - name: Verify Android SDK
+      - name: Install Android SDK packages
         shell: bash
         run: |
-          set -e
-          echo "=== Java ==="
-          java -version
-          echo "=== Android SDK ==="
-          echo "$ANDROID_HOME"
+          set -euo pipefail
+
+          yes | sdkmanager --licenses || true
+
+          sdkmanager --install "platform-tools"
+          sdkmanager --install "platforms;android-35"
+          sdkmanager --install "build-tools;35.0.0"
+
+          echo "=== Installed SDK packages ==="
           sdkmanager --list_installed
-          ls "$ANDROID_HOME/platforms"
-          ls "$ANDROID_HOME/build-tools"
 
       - name: Install Godot 4.4.1
         shell: bash
@@ -80,14 +77,14 @@ jobs:
           if [ -d "$RUNNER_TEMP/templates/templates" ]; then
             cp -a "$RUNNER_TEMP/templates/templates/." "$TEMPLATE_DIR/"
           else
-            echo "ERROR: Export templates directory not found."
+            echo "ERROR: Godot export templates were not found."
             find "$RUNNER_TEMP/templates" -maxdepth 3 -type f
             exit 1
           fi
 
           ls -lah "$TEMPLATE_DIR"
 
-      - name: Check project configuration
+      - name: Check project files
         shell: bash
         run: |
           set -euo pipefail
@@ -106,12 +103,22 @@ jobs:
           echo "=== Export presets ==="
           cat export_presets.cfg
 
+          echo "=== Java ==="
+          java -version
+
+          echo "=== Android SDK ==="
+          echo "ANDROID_HOME=$ANDROID_HOME"
+          ls "$ANDROID_HOME/platforms"
+          ls "$ANDROID_HOME/build-tools"
+
       - name: Import Godot project
         shell: bash
         run: |
           set -o pipefail
-          godot --headless --editor --path "$GITHUB_WORKSPACE" --import \
-            2>&1 | tee import.log
+
+          godot --headless --editor \
+            --path "$GITHUB_WORKSPACE" \
+            --import 2>&1 | tee import.log
 
       - name: Export Android APK
         shell: bash
@@ -129,7 +136,7 @@ jobs:
           echo "Godot export exit code: $result"
 
           if [ "$result" -ne 0 ]; then
-            echo "APK export failed. See export.log."
+            echo "ERROR: Android APK export failed."
             exit "$result"
           fi
 
