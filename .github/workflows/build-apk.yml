@@ -1,62 +1,104 @@
-name: Build Android APK with Godot
+name: Build Godot Android APK
 
 on:
   workflow_dispatch:
   push:
     branches:
       - main
+      - master
 
 permissions:
   contents: read
+
+concurrency:
+  group: godot-android-build-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   build:
     name: Export Android APK
     runs-on: ubuntu-22.04
-    timeout-minutes: 45
+    timeout-minutes: 60
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Set up Java 17
+      - name: Set up Java
         uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: '17'
 
-      - name: Set up Android SDK
-        uses: android-actions/setup-android@v3
+      - name: Configure Android SDK
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          SDK_ROOT="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-/usr/local/lib/android/sdk}}"
+          mkdir -p "$SDK_ROOT"
+          echo "ANDROID_HOME=$SDK_ROOT" >> "$GITHUB_ENV"
+          echo "ANDROID_SDK_ROOT=$SDK_ROOT" >> "$GITHUB_ENV"
+          echo "$SDK_ROOT/platform-tools" >> "$GITHUB_PATH"
+
+          echo "Android SDK directory: $SDK_ROOT"
+          find "$SDK_ROOT/cmdline-tools" -type f -name sdkmanager 2>/dev/null || true
 
       - name: Install Android SDK packages
         shell: bash
         run: |
           set -euo pipefail
 
-          yes | sdkmanager --licenses || true
+          SDK_ROOT="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-/usr/local/lib/android/sdk}}"
+          SDKMANAGER="$(find "$SDK_ROOT/cmdline-tools" -type f -name sdkmanager 2>/dev/null | sort | tail -n 1 || true)"
 
-          sdkmanager --install "platform-tools"
-          sdkmanager --install "platforms;android-35"
-          sdkmanager --install "build-tools;35.0.0"
+          if [ -z "$SDKMANAGER" ]; then
+            echo "ERROR: sdkmanager was not found in $SDK_ROOT/cmdline-tools."
+            echo "Available SDK directories:"
+            ls -la "$SDK_ROOT" || true
+            exit 1
+          fi
 
-          echo "=== Installed SDK packages ==="
-          sdkmanager --list_installed
+          echo "Using sdkmanager: $SDKMANAGER"
 
-      - name: Install Godot 4.4.1
+          set +o pipefail
+          yes | "$SDKMANAGER" --licenses
+          LICENSE_STATUS=$?
+          set -o pipefail
+          echo "License command exit status: $LICENSE_STATUS"
+
+          "$SDKMANAGER" --install \
+            "platform-tools" \
+            "platforms;android-35" \
+            "build-tools;35.0.0"
+
+          echo "=== Installed packages ==="
+          "$SDKMANAGER" --list_installed
+
+      - name: Download Godot 4.4.1
         shell: bash
         run: |
           set -euo pipefail
-          cd "$RUNNER_TEMP"
 
-          wget -q \
+          mkdir -p "$RUNNER_TEMP/godot"
+          cd "$RUNNER_TEMP/godot"
+
+          curl -fL --retry 3 \
             "https://github.com/godotengine/godot/releases/download/4.4.1-stable/Godot_v4.4.1-stable_linux.x86_64.zip" \
-            -O godot.zip
+            -o godot.zip
 
-          unzip -oq godot.zip
-          chmod +x Godot_v4.4.1-stable_linux.x86_64
-          sudo mv Godot_v4.4.1-stable_linux.x86_64 /usr/local/bin/godot
+          unzip -o godot.zip
+          GODOT_BIN="$(find "$RUNNER_TEMP/godot" -type f -name 'Godot_v4.4.1-stable_linux.x86_64' | head -n 1)"
 
-          godot --version
+          if [ -z "$GODOT_BIN" ]; then
+            echo "ERROR: Godot executable was not found."
+            find "$RUNNER_TEMP/godot" -maxdepth 3 -type f
+            exit 1
+          fi
+
+          chmod +x "$GODOT_BIN"
+          echo "GODOT_BIN=$GODOT_BIN" >> "$GITHUB_ENV"
+          "$GODOT_BIN" --version
 
       - name: Install Godot export templates
         shell: bash
@@ -65,89 +107,95 @@ jobs:
 
           TEMPLATE_DIR="$HOME/.local/share/godot/export_templates/4.4.1.stable"
           mkdir -p "$TEMPLATE_DIR"
+          cd "$RUNNER_TEMP/godot"
 
-          wget -q \
+          curl -fL --retry 3 \
             "https://github.com/godotengine/godot/releases/download/4.4.1-stable/Godot_v4.4.1-stable_export_templates.tpz" \
-            -O "$RUNNER_TEMP/templates.tpz"
+            -o templates.tpz
 
-          mkdir -p "$RUNNER_TEMP/templates"
-          unzip -oq "$RUNNER_TEMP/templates.tpz" \
-            -d "$RUNNER_TEMP/templates"
+          unzip -o templates.tpz -d templates_unpacked
 
-          if [ -d "$RUNNER_TEMP/templates/templates" ]; then
-            cp -a "$RUNNER_TEMP/templates/templates/." "$TEMPLATE_DIR/"
+          TEMPLATE_SOURCE="$(find "$RUNNER_TEMP/godot/templates_unpacked" -type d -name 'templates' | head -n 1 || true)"
+
+          if [ -n "$TEMPLATE_SOURCE" ]; then
+            cp -a "$TEMPLATE_SOURCE/." "$TEMPLATE_DIR/"
           else
-            echo "ERROR: Godot export templates were not found."
-            find "$RUNNER_TEMP/templates" -maxdepth 3 -type f
-            exit 1
+            cp -a "$RUNNER_TEMP/godot/templates_unpacked/." "$TEMPLATE_DIR/"
           fi
 
-          ls -lah "$TEMPLATE_DIR"
+          echo "=== Export templates ==="
+          ls -la "$TEMPLATE_DIR"
 
-      - name: Check project files
+      - name: Validate project files
         shell: bash
         run: |
           set -euo pipefail
 
-          if [ ! -f project.godot ]; then
-            echo "ERROR: project.godot is missing from repository root."
-            find . -name project.godot -not -path './.git/*'
+          if [ ! -f "$GITHUB_WORKSPACE/project.godot" ]; then
+            echo "ERROR: project.godot was not found in the repository root."
+            echo "Repository files:"
+            ls -la "$GITHUB_WORKSPACE"
             exit 1
           fi
 
-          if [ ! -f export_presets.cfg ]; then
-            echo "ERROR: export_presets.cfg is missing."
+          if [ ! -f "$GITHUB_WORKSPACE/export_presets.cfg" ]; then
+            echo "ERROR: export_presets.cfg was not found."
             exit 1
           fi
 
-          echo "=== Export presets ==="
-          cat export_presets.cfg
+          echo "=== Android export preset ==="
+          grep -n -E 'name="Android"|platform="Android"|export_path|package/unique_name|version/code|version/name' \
+            "$GITHUB_WORKSPACE/export_presets.cfg" || true
 
-          echo "=== Java ==="
-          java -version
-
-          echo "=== Android SDK ==="
-          echo "ANDROID_HOME=$ANDROID_HOME"
-          ls "$ANDROID_HOME/platforms"
-          ls "$ANDROID_HOME/build-tools"
+          echo "=== Project main scene ==="
+          grep -n -E '^run/main_scene=' "$GITHUB_WORKSPACE/project.godot" || true
 
       - name: Import Godot project
         shell: bash
         run: |
-          set -o pipefail
+          set -uo pipefail
+          cd "$GITHUB_WORKSPACE"
 
-          godot --headless --editor \
-            --path "$GITHUB_WORKSPACE" \
-            --import 2>&1 | tee import.log
+          "$GODOT_BIN" --headless --editor --path "$GITHUB_WORKSPACE" --import \
+            2>&1 | tee "$GITHUB_WORKSPACE/import.log"
+
+          result=${PIPESTATUS[0]}
+          if [ "$result" -ne 0 ]; then
+            echo "ERROR: Godot project import failed."
+            exit "$result"
+          fi
 
       - name: Export Android APK
         shell: bash
         run: |
           set -uo pipefail
-          mkdir -p build
+          cd "$GITHUB_WORKSPACE"
 
-          godot --headless --verbose \
+          mkdir -p "$GITHUB_WORKSPACE/build"
+
+          "$GODOT_BIN" --headless --verbose \
             --path "$GITHUB_WORKSPACE" \
             --export-debug "Android" \
             "$GITHUB_WORKSPACE/build/AI-Game.apk" \
-            2>&1 | tee export.log
+            2>&1 | tee "$GITHUB_WORKSPACE/export.log"
 
           result=${PIPESTATUS[0]}
-          echo "Godot export exit code: $result"
 
           if [ "$result" -ne 0 ]; then
-            echo "ERROR: Android APK export failed."
+            echo "ERROR: Godot Android export failed."
             exit "$result"
           fi
 
-          if [ ! -s build/AI-Game.apk ]; then
-            echo "ERROR: APK was not created."
+          if [ ! -s "$GITHUB_WORKSPACE/build/AI-Game.apk" ]; then
+            echo "ERROR: APK was not created or is empty."
             exit 1
           fi
 
-          ls -lh build/AI-Game.apk
+          echo "=== APK information ==="
+          ls -lh "$GITHUB_WORKSPACE/build/AI-Game.apk"
+          file "$GITHUB_WORKSPACE/build/AI-Game.apk" || true
 
-      - name: Upload APK
+      - name: Upload APK artifact
         if: success()
         uses: actions/upload-artifact@v4
         with:
@@ -160,7 +208,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: Godot-Android-Build-Logs
+          name: Godot-Build-Diagnostics
           path: |
             import.log
             export.log
