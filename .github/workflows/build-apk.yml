@@ -24,29 +24,22 @@ jobs:
           distribution: temurin
           java-version: '17'
 
-      - name: Accept Android licenses and install SDK
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install Android SDK packages
         shell: bash
         run: |
           set -e
-
-          SDKMANAGER="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
-
-          if [ ! -x "$SDKMANAGER" ]; then
-            SDKMANAGER="$(find "$ANDROID_HOME/cmdline-tools" \
-              -type f -name sdkmanager 2>/dev/null | head -n 1)"
-          fi
-
-          if [ ! -x "$SDKMANAGER" ]; then
-            echo "ERROR: sdkmanager not found"
-            exit 1
-          fi
-
-          yes | "$SDKMANAGER" --licenses || true
-
-          "$SDKMANAGER" \
+          yes | sdkmanager --licenses || true
+          sdkmanager \
             "platform-tools" \
             "platforms;android-34" \
-            "build-tools;34.0.0"
+            "platforms;android-35" \
+            "build-tools;34.0.0" \
+            "build-tools;35.0.0" \
+            "ndk;23.2.8568313" \
+            "cmake;3.10.2.4988404"
 
       - name: Download Godot 4.4.1
         shell: bash
@@ -74,13 +67,13 @@ jobs:
           mkdir templates
           unzip -q templates.tpz -d templates
           cp -r templates/templates/. "$TEMPLATE_DIR/"
-
           test -s "$TEMPLATE_DIR/android_debug.apk"
 
       - name: Configure Godot Android paths
         shell: bash
         run: |
           set -e
+
           mkdir -p "$HOME/.config/godot"
 
           cat > "$HOME/.config/godot/editor_settings-4.4.tres" <<EOF
@@ -94,7 +87,11 @@ jobs:
           test -d "$ANDROID_HOME"
           test -d "$JAVA_HOME"
 
-      - name: Validate project
+          echo "ANDROID_HOME=$ANDROID_HOME"
+          echo "JAVA_HOME=$JAVA_HOME"
+          sdkmanager --list_installed
+
+      - name: Validate project files
         shell: bash
         run: |
           set -e
@@ -106,6 +103,10 @@ jobs:
           grep -q 'name="Android"' export_presets.cfg
           grep -q 'platform="Android"' export_presets.cfg
 
+          echo "Project files found."
+          echo "Export presets:"
+          cat export_presets.cfg
+
       - name: Import project
         shell: bash
         run: |
@@ -113,17 +114,27 @@ jobs:
             --path "$GITHUB_WORKSPACE" \
             --import
 
-      - name: Export Android APK
+      - name: Diagnose Android export
         shell: bash
         run: |
           mkdir -p build
-          set -o pipefail
+          set +e
 
           godot --headless --verbose \
             --path "$GITHUB_WORKSPACE" \
             --export-debug "Android" \
             "$GITHUB_WORKSPACE/build/AI-Game.apk" \
             2>&1 | tee export.log
+
+          RESULT=${PIPESTATUS[0]}
+
+          if [ "$RESULT" -ne 0 ]; then
+            echo "Godot export failed. Diagnostic log follows:"
+            grep -i -C 5 -E \
+              "ERROR|WARNING|Android|SDK|JDK|NDK|template|export" \
+              export.log || true
+            exit "$RESULT"
+          fi
 
       - name: Verify APK
         shell: bash
@@ -141,7 +152,7 @@ jobs:
           if-no-files-found: error
           retention-days: 7
 
-      - name: Upload diagnostic log
+      - name: Upload diagnostic logs
         if: always()
         uses: actions/upload-artifact@v4
         with:
