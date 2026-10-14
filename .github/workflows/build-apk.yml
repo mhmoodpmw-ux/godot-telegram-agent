@@ -37,7 +37,7 @@ jobs:
             exit 1
           fi
 
-          yes | "$SDKMANAGER" --licenses
+          yes | "$SDKMANAGER" --licenses || true
 
           "$SDKMANAGER" \
             "platform-tools" \
@@ -52,6 +52,7 @@ jobs:
         shell: bash
         run: |
           set -e
+
           test -d "$ANDROID_HOME"
           test -d "$JAVA_HOME"
 
@@ -124,7 +125,7 @@ jobs:
           grep -q 'name="Android"' export_presets.cfg
           grep -q 'platform="Android"' export_presets.cfg
 
-          echo "Project and Android preset found."
+          echo "Project files and Android preset found."
 
       - name: Import Godot project
         shell: bash
