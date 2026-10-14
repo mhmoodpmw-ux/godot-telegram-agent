@@ -24,15 +24,22 @@ jobs:
           distribution: temurin
           java-version: '17'
 
-      - name: Setup Android SDK
-        uses: android-actions/setup-android@v3
-
-      - name: Install Android SDK packages
+      - name: Accept licenses and install Android SDK
         shell: bash
         run: |
           set -e
-          yes | sdkmanager --licenses || true
-          sdkmanager \
+
+          SDKMANAGER="$(find "$ANDROID_HOME/cmdline-tools" \
+            -type f -name sdkmanager 2>/dev/null | head -n 1)"
+
+          if [ -z "$SDKMANAGER" ]; then
+            echo "ERROR: sdkmanager not found"
+            exit 1
+          fi
+
+          yes | "$SDKMANAGER" --licenses
+
+          "$SDKMANAGER" \
             "platform-tools" \
             "platforms;android-34" \
             "platforms;android-35" \
@@ -41,22 +48,41 @@ jobs:
             "ndk;23.2.8568313" \
             "cmake;3.10.2.4988404"
 
+      - name: Verify Android SDK
+        shell: bash
+        run: |
+          set -e
+          test -d "$ANDROID_HOME"
+          test -d "$JAVA_HOME"
+
+          SDKMANAGER="$(find "$ANDROID_HOME/cmdline-tools" \
+            -type f -name sdkmanager 2>/dev/null | head -n 1)"
+
+          "$SDKMANAGER" --list_installed
+
+          echo "ANDROID_HOME=$ANDROID_HOME"
+          echo "JAVA_HOME=$JAVA_HOME"
+
       - name: Download Godot 4.4.1
         shell: bash
         run: |
           set -e
+
           wget -q \
             https://github.com/godotengine/godot/releases/download/4.4.1-stable/Godot_v4.4.1-stable_linux.x86_64.zip \
             -O godot.zip
+
           unzip -q godot.zip
           chmod +x Godot_v4.4.1-stable_linux.x86_64
           sudo mv Godot_v4.4.1-stable_linux.x86_64 /usr/local/bin/godot
+
           godot --version
 
       - name: Install Godot export templates
         shell: bash
         run: |
           set -e
+
           TEMPLATE_DIR="$HOME/.local/share/godot/export_templates/4.4.1.stable"
           mkdir -p "$TEMPLATE_DIR"
 
@@ -67,6 +93,7 @@ jobs:
           mkdir templates
           unzip -q templates.tpz -d templates
           cp -r templates/templates/. "$TEMPLATE_DIR/"
+
           test -s "$TEMPLATE_DIR/android_debug.apk"
 
       - name: Configure Godot Android paths
@@ -84,17 +111,11 @@ jobs:
           export/android/java_sdk_path = "$JAVA_HOME"
           EOF
 
-          test -d "$ANDROID_HOME"
-          test -d "$JAVA_HOME"
-
-          echo "ANDROID_HOME=$ANDROID_HOME"
-          echo "JAVA_HOME=$JAVA_HOME"
-          sdkmanager --list_installed
-
-      - name: Validate project files
+      - name: Validate project
         shell: bash
         run: |
           set -e
+
           test -f project.godot
           test -f Main.tscn
           test -f Main.gd
@@ -103,22 +124,22 @@ jobs:
           grep -q 'name="Android"' export_presets.cfg
           grep -q 'platform="Android"' export_presets.cfg
 
-          echo "Project files found."
-          echo "Export presets:"
-          cat export_presets.cfg
+          echo "Project and Android preset found."
 
-      - name: Import project
+      - name: Import Godot project
         shell: bash
         run: |
+          set -e
+
           godot --headless --editor \
             --path "$GITHUB_WORKSPACE" \
             --import
 
-      - name: Diagnose Android export
+      - name: Export Android APK
         shell: bash
         run: |
           mkdir -p build
-          set +e
+          set -o pipefail
 
           godot --headless --verbose \
             --path "$GITHUB_WORKSPACE" \
@@ -126,20 +147,11 @@ jobs:
             "$GITHUB_WORKSPACE/build/AI-Game.apk" \
             2>&1 | tee export.log
 
-          RESULT=${PIPESTATUS[0]}
-
-          if [ "$RESULT" -ne 0 ]; then
-            echo "Godot export failed. Diagnostic log follows:"
-            grep -i -C 5 -E \
-              "ERROR|WARNING|Android|SDK|JDK|NDK|template|export" \
-              export.log || true
-            exit "$RESULT"
-          fi
-
       - name: Verify APK
         shell: bash
         run: |
           set -e
+
           test -s build/AI-Game.apk
           ls -lh build/AI-Game.apk
 
